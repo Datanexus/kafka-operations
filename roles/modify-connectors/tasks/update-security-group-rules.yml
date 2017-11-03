@@ -1,0 +1,70 @@
+# (c) 2016 DataNexus Inc.  All Rights Reserved
+---
+# first, check to make sure that the external_subnet is defined; if it is not,
+# then it's an error
+- name: Ensure that external_subnet is defined
+  fail:
+    msg: "The external_subnet parameter must be defined"
+  run_once: true
+  when: external_subnet is undefined
+# then set a couple of facts we're going to need later
+- set_fact:
+    multi_interface: "{{internal_subnet is defined and external_subnet != internal_subnet}}"
+- set_fact:
+    sg_name: "{{(multi_interface | bool) | ternary((project + '_' + application + '_external'), (project + '_' + application))}}"
+# now we're ready to modify our security group to add access to the worker_port
+# through the external interface; first for an AWS cloud
+- block:
+  # add access on the `external_subnet` to the named security group for all of
+  # the ports in the worker_ports list (to allow access the workers being
+  # started)
+  - name: Open {{worker_ports}} in security group {{sg_name}} under AWS
+    local_action:
+      module: ec2_group
+      name: "{{sg_name}}"
+      description: "external kafka ingress and unrestricted egress rules (ansible)"
+      purge_rules: no
+      purge_rules_egress: no
+      purge_tags: no
+      rules:
+        - proto: tcp
+          from_port: "{{wkr_port}}"
+          to_port: "{{wkr_port}}"
+          cidr_ip: "{{external_subnet}}"
+    with_items: "{{worker_ports | unique}}"
+    register: ec2_group_out
+    failed_when: false
+    loop_control:
+      loop_var: wkr_port
+    run_once: true
+  # and check to make sure that we didn't see a failure in any of our calls to
+  # the ec2_group module (above)
+  - name: Fail if ec2_group module call failed
+    fail:
+      msg: "ec2_group call failed"
+    when:
+      - ec2_group_result.failed == true
+      - "'already exists' not in (ec2_group_result.msg | default(''))"
+    with_items: "{{ec2_group_out.results}}"
+    loop_control:
+      loop_var: ec2_group_result
+    run_once: true
+  when: cloud == 'aws'
+# and next for an OSP cloud
+- block:
+  - name: Open {{worker_ports}} in security group {{sg_name}} under OSP
+    local_action:
+      module: os_security_group_rule
+      cloud: "{{tenant}}"
+      security_group: "{{sg_name}}"
+      protocol: tcp
+      port_range_min: "{{wkr_port}}"
+      port_range_max: "{{wkr_port}}"
+      remote_ip_prefix: "{{external_subnet}}"
+    with_items: "{{worker_ports | unique}}"
+    register: os_security_group_rule_out
+    failed_when: false
+    loop_control:
+      loop_var: wkr_port
+    run_once: true
+  when: cloud == 'osp'

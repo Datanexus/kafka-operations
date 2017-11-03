@@ -1,0 +1,86 @@
+# (c) 2016 DataNexus Inc.  All Rights Reserved
+---
+# Contains tasks to modify connectors in the cluster (currently only
+# adding connectors to the cluster is supported, but this is extensible)
+- block:
+  # set a few facts containing the various supported MIME types
+  - set_fact:
+      package_mime_types:
+        - 'application/x-rpm'
+      archive_mime_types:
+        - 'application/x-tar'
+        - 'application/x-gzip'
+      jar_mime_types:
+        - 'application/zip'
+        - 'application/x-zip'
+      kafka_plugin_dir: "{{(kafka_distro == 'confluent') | ternary('/usr/share/java', kafka_dir + '/libs')}}"
+  # if the action is 'load', then loop through the plugins that are being loaded
+  # and add each of them, in turn, to the target nodes based on the information
+  # in the corresponding 'action_hash' entry
+  - include_tasks: load-plugin.yml
+    vars:
+      plugin_name: "{{item.name}}"
+      local_plugin_file: "{{item.local_file | default('')}}"
+      plugin_url: "{{item.url | default('')}}"
+      post_install_tasks: "{{item.post_install_tasks | default([])}}"
+    with_items: "{{action_hash.plugin_list | default([])}}"
+    when: (action_hash.action | default ('')) == 'load'
+  # if the action is 'start', 'stop', or 'restart', then start, stop, or restart
+  # a worker in the connector framework (in distributed mode) based on the
+  # information contained in the `action_hash` entry (and ensure that we can
+  # communicate with that worker via the `worker_port` included in that same
+  # `action_hash` entry)
+  - block:
+    - include_tasks: manage-worker.yml
+      vars:
+        # properties set for key converter
+        key_converter: "{{item.key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        key_converter_schemas_enable: "{{item.key_converter_schemas_enable | default('false')}}"
+        key_converter_schema_registry_url: "{{((item.key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for value converter
+        value_converter: "{{item.value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        value_converter_schemas_enable: "{{item.value_converter_schemas_enable | default('false')}}"
+        value_converter_schema_registry_url: "{{((item.value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for internal key converter
+        internal_key_converter: "{{item.internal_key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        internal_key_converter_schemas_enable: "{{item.internal_key_converter_schemas_enable | default('false')}}"
+        internal_key_converter_schema_registry_url: "{{((item.internal_key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for internal value converter
+        internal_value_converter: "{{item.internal_value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        internal_value_converter_schemas_enable: "{{item.internal_value_converter_schemas_enable | default('false')}}"
+        internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # topics used by connectors to store offset, configuration, and status information
+        offset_topic: "{{item.offset_topic | default('connect-offsets')}}"
+        config_topic: "{{item.config_topic | default('connect-configs')}}"
+        status_topic: "{{item.status_topic | default('connect-status')}}"
+        # worker specific configuration parameters
+        group_id: "{{item.group_id | default('default_group')}}"
+        worker_name: "{{item.name | default('')}}"
+        worker_classpath: "{{item.worker_classpath | default(kafka_plugin_dir + '/' + item.name + ',' + kafka_plugin_dir)}}"
+        worker_port: "{{item.worker_port | default(rest_port)}}"
+        connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
+        action: "{{action_hash.action}}"
+      with_items: "{{action_hash.worker_list | default([])}}"
+    # if we're starting a new worker in a cloud (AWS or OSP) environment, then
+    # we need to make sure that the firewall rules for this instance allow for
+    # access to the worker port through the external interface
+    - include_tasks: update-security-group-rules.yml
+      vars:
+        worker_ports: "{{action_hash.worker_list | map(attribute='worker_port') | list}}"
+      when:
+        - cloud == 'aws' or cloud == 'osp'
+        - (action_hash.action | default ('')) == 'start-workers'
+    when: ([(action_hash.action | default (''))] | intersect(['start-workers', 'stop-workers', 'restart-workers'])) != []
+  # if the action is 'create', 'restart', 'update', 'pause', 'resume', or
+  # 'delete' then loop through the connectors in the 'connector_list' contained
+  # in the `action_hash` and perform the corresponding action on each of them,
+  # in turn
+  - include_tasks: manage-connector.yml
+    vars:
+      connector_name: "{{item.name}}"
+      connector_config: "{{item.config | default({})}}"
+      connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
+      action: "{{action_hash.action}}"
+    with_items: "{{action_hash.connector_list | default([])}}"
+    when: ([(action_hash.action | default (''))] | intersect(['create', 'restart', 'update', 'pause', 'resume', 'delete'])) != []
+  when: (action_hash | default({})) != {}
