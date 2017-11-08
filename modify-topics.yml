@@ -46,8 +46,8 @@
   vars_files:
     - vars/kafka-operations.yml
   vars:
-    - kafka_nodes: "{{groups['kafka']}}"
-    - zookeeper_nodes: "{{groups['zookeeper']}}"
+    - kafka_nodes: "{{groups['kafka'] | default([])}}"
+    - zookeeper_nodes: "{{groups['zookeeper'] | default([])}}"
   pre_tasks:
     # first, initialize the play by loading any `config_file` that may have
     # been passed in, determining the `data_iface` and `api_iface` values from
@@ -62,7 +62,7 @@
     # and now that we know we have our data_iface identified, we can construct
     # the list of zk_nodes (the data_iface IP addresses of our zookeeper_nodes)
     - set_fact:
-        zk_nodes: "{{(zookeeper_nodes | default([])) | map('extract', hostvars, [('ansible_' + data_iface), 'ipv4', 'address']) | list}}"
+        zk_nodes: "{{zookeeper_nodes | map('extract', hostvars, [('ansible_' + data_iface), 'ipv4', 'address']) | list}}"
     # Now that we have all of the facts we need we can proceed to modify the topics
     # if that's what we're doing (add new topics to or remove existing topics from
     # the cluster)

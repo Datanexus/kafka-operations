@@ -3,7 +3,9 @@
 # Contains tasks to modify connectors in the cluster (currently only
 # adding connectors to the cluster is supported, but this is extensible)
 - block:
-  # set a few facts containing the various supported MIME types
+  # set a few facts containing the various supported MIME types, the location
+  # of the kafka plugin directory, and the number of seconds to pause between
+  # this action and the next (defaults to zero seconds if undefined)
   - set_fact:
       package_mime_types:
         - 'application/x-rpm'
@@ -14,6 +16,7 @@
         - 'application/zip'
         - 'application/x-zip'
       kafka_plugin_dir: "{{(kafka_distro == 'confluent') | ternary('/usr/share/java', kafka_dir + '/libs')}}"
+      seconds_between_actions: "{{(action_hash.seconds_between_actions | default(0)) | int}}"
   # if the action is 'load', then loop through the plugins that are being loaded
   # and add each of them, in turn, to the target nodes based on the information
   # in the corresponding 'action_hash' entry
@@ -83,4 +86,8 @@
       action: "{{action_hash.action}}"
     with_items: "{{action_hash.connector_list | default([])}}"
     when: ([(action_hash.action | default (''))] | intersect(['create', 'restart', 'update', 'pause', 'resume', 'delete'])) != []
+  - name: Pause before next action (if a pause was specified)
+    pause:
+      seconds: "{{seconds_between_actions}}"
+    when: (seconds_between_actions | int) > 0
   when: (action_hash | default({})) != {}
