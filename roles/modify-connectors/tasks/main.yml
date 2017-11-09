@@ -28,11 +28,11 @@
       post_install_tasks: "{{item.post_install_tasks | default([])}}"
     with_items: "{{action_hash.plugin_list | default([])}}"
     when: (action_hash.action | default ('')) == 'load'
-  # if the action is 'start', 'stop', or 'restart', then start, stop, or restart
-  # a worker in the connector framework (in distributed mode) based on the
-  # information contained in the `action_hash` entry (and ensure that we can
-  # communicate with that worker via the `worker_port` included in that same
-  # `action_hash` entry)
+  # if the action is 'start-workers', 'stop-workers', or 'restart-workers', then
+  # start, stop, or restart a worker in the connector framework (in distributed
+  # mode) based on the information contained in the `action_hash` entry (and
+  # ensure that we can communicate with that worker via the `worker_port`
+  # included in that same `action_hash` entry)
   - block:
     - include_tasks: manage-worker.yml
       vars:
@@ -74,6 +74,40 @@
         - cloud == 'aws' or cloud == 'osp'
         - (action_hash.action | default ('')) == 'start-workers'
     when: ([(action_hash.action | default (''))] | intersect(['start-workers', 'stop-workers', 'restart-workers'])) != []
+  # if the action is 'start-standalone-worker', 'stop-standalone-worker', or
+  # 'restart-standalone-worker', then start, stop, or restart the worker in
+  # the connector framework (in standalone mode) based on the information
+  # contained in the `action_hash` entry (and ensure that we can communicate
+  # with that worker via the `worker_port` included in that same `action_hash`
+  # entry)
+  - block:
+    - include_tasks: manage-standalone-worker.yml
+      vars:
+        # properties set for key converter
+        key_converter: "{{item.key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        key_converter_schemas_enable: "{{item.key_converter_schemas_enable | default('false')}}"
+        key_converter_schema_registry_url: "{{((item.key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for value converter
+        value_converter: "{{item.value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        value_converter_schemas_enable: "{{item.value_converter_schemas_enable | default('false')}}"
+        value_converter_schema_registry_url: "{{((item.value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for internal key converter
+        internal_key_converter: "{{item.internal_key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        internal_key_converter_schemas_enable: "{{item.internal_key_converter_schemas_enable | default('false')}}"
+        internal_key_converter_schema_registry_url: "{{((item.internal_key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # properties set for internal value converter
+        internal_value_converter: "{{item.internal_value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
+        internal_value_converter_schemas_enable: "{{item.internal_value_converter_schemas_enable | default('false')}}"
+        internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        # worker specific configuration parameters
+        worker_name: "{{item.name | default('')}}"
+        worker_classpath: "{{item.worker_classpath | default(kafka_plugin_dir + '/' + item.name + ',' + kafka_plugin_dir)}}"
+        worker_port: "{{item.worker_port | default(rest_port)}}"
+        connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
+        action: "{{action_hash.action}}"
+        connector_list: "{{item.connector_list | default([])}}"
+      with_items: "{{action_hash.worker_list | default([])}}"
+    when: ([(action_hash.action | default (''))] | intersect(['start-standalone-workers', 'stop-standalone-workers', 'restart-standalone-workers'])) != []
   # if the action is 'create', 'restart', 'update', 'pause', 'resume', or
   # 'delete' then loop through the connectors in the 'connector_list' contained
   # in the `action_hash` and perform the corresponding action on each of them,

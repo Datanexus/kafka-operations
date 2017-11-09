@@ -1,0 +1,36 @@
+# (c) 2016 DataNexus Inc.  All Rights Reserved
+
+# The list of host/port pairs used to establish the initial connection to the
+# Kafka cluster; this list is used to discover the full set of nodes in the
+# cluster
+bootstrap.servers={{(kfka_nodes | join(':9092,')) + ':9092'}}
+
+# the host and port that the RESTful API should listen on
+rest.host.name={{api_addr}}
+rest.port={{worker_port}}
+
+# Set to a list of filesystem paths separated by commas (,) to enable class loading isolation for plugins
+# (connectors, converters, transformations). The list should consist of top level directories that include
+# any combination of:
+# a) directories immediately containing jars with plugins and their dependencies
+# b) uber-jars with plugins and their dependencies
+# c) directories immediately containing the package directory structure of classes of plugins and their dependencies
+# Examples:
+# plugin.path=/usr/local/share/java,/usr/local/share/kafka/plugins,/opt/connectors,
+plugin.path={{worker_classpath}}
+
+# The converters specify the format of data in Kafka and how to translate it
+# into Connect data. Every Connect user will need to configure these based on
+# the format they want their data in when loaded from or stored into Kafka
+key.converter={{key_converter}}
+value.converter={{value_converter}}
+
+# The internal converter used for offsets and config data is configurable and
+# must be specified, but most users will always want to use the built-in
+# default.  Offset and config data is never visible outside of Copycat in
+# this format.
+internal.key.converter={{internal_key_converter}}
+internal.value.converter={{internal_value_converter}}
+
+# file to use to manage offsets
+offset.storage.file.filename={{kafka_data_dir}}/{{worker_offset_filename}}
