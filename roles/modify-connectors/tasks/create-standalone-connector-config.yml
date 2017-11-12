@@ -1,0 +1,37 @@
+# (c) 2016 DataNexus Inc.  All Rights Reserved
+---
+# create a new connectors property file and add it to the list of connector
+# properties files that we will be using to start the standalone worker
+- name: Set a fact containing the connector name
+  set_fact:
+    connector_name: "{{connector.name | default('')}}"
+- name: Check and make sure a connector name was passed in
+  fail:
+    msg: "A connector name must be provided for all connectors in a standalone worker configuration"
+  when: connector_name == ''
+- name: Set a fact containing the connector properties filename
+  set_fact:
+    props_filename: "{{connector_name + '.properties'}}"
+# and create the appropriate file from the connector name and configurations
+- block:
+  - name: Initialize the properties file from the standalone template
+    template:
+      src: standalone-connector.properties.j2
+      dest: "/etc/kafka-connectors/{{props_filename}}"
+      owner: "{{kafka_user}}"
+      group: "{{kafka_group}}"
+      mode: 0644
+  - name: Add config parameters to properties file
+    lineinfile:
+      dest: "/etc/kafka-connectors/{{props_filename}}"
+      line: "{{config_item.key}}={{config_item.value}}"
+    with_dict: '{{connector.config}}'
+    loop_control:
+      loop_var: config_item
+  become: true
+  become_user: "{{kafka_user}}"
+# and add the filename to the list of properties files that will be used to
+# start the standalone worker
+- name: Add connector properties filename to list
+  set_fact:
+    connector_prop_files: "{{(connector_prop_files | default([])) + ['/etc/kafka-connectors/' + props_filename]}}"

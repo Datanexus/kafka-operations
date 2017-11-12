@@ -1,6 +1,6 @@
-# Managing Connectors
+# Managing Workers and Connectors
 
-The [modfy-connectors.yml](../modify-connectors.yml) playbook in this repository can be used to modify the connectors that are deployed to a Kafka instance or cluster. Specifically, the playbook in this playbook can be used to:
+The [modify-connectors.yml](../modify-connectors.yml) playbook in this repository can be used to modify the connectors that are deployed to a Kafka instance or cluster. Specifically, the playbook in this playbook can be used to:
 
 * Add new connector plugins to the nodes in the cluster
 * Manage workers in the connector framework on those nodes, and
@@ -120,7 +120,7 @@ If the connector is provided to the playbook as a JAR (Java ARchive) file, then 
 
 ## Managing Workers in the Connector Framework
 
-Once the desired connector plugins have been installed locally on the nodes that make up our cluster, the next step necessary (before we can deploy instances of those connectors locally) is to start workers in the connector framework on our target nodes (or restart the workers running the connector framework if we are adding new connectors to the framework and there are already workers running locally). Fortunately, the [modfy-connectors.yml](../modify-connectors.yml) playbook in this repository supports the management of the workers running in the connector framework on a set of one or more target nodes via an `ansible-playbook` run. As was the case with adding new connector plugins to our nodes (above), a custom configuration file can be created to control this process. Here is an example of such a file:
+Once the desired connector plugins have been installed locally on the nodes that make up our cluster, the next step necessary (before we can deploy instances of those connectors locally) is to start workers in the connector framework on our target nodes (or restart the workers running the connector framework if we are adding new connectors to the framework and there are already workers running locally). Fortunately, the [modify-connectors.yml](../modify-connectors.yml) playbook in this repository supports the management of the workers running in the connector framework on a set of one or more target nodes via an `ansible-playbook` run. As was the case with adding new connector plugins to our nodes (above), a custom configuration file can be created to control this process. Here is an example of such a file:
 
 ```bash
 $ cat config-start-workers.yml
@@ -255,7 +255,6 @@ user: 'centos'
 region: us-west-2
 # define the action_list for this operation
 action_list:
-  # - action: update
   - action: create
     connector_list:
       - name: solrcloud-metrics
@@ -307,8 +306,7 @@ user: 'centos'
 region: us-west-2
 # define the action_list for this operation
 action_list:
-  # - action: update
-  - action: create
+  - action: update
     connector_list:
       - name: solrcloud-metrics
         worker_port: 8084
@@ -334,7 +332,7 @@ action_list:
           "solr.ignore.unknown.fields": false
 ```
 
-The remaining actions (restarting, pausing, resuming, and deleting named connector instances) are much simpler since they only require that the name of the connector and worker port be specified in the `connector_list` entries; for example this local variables file can be used to pause the two connector instances shown above:
+The remaining actions (restarting, pausing, resuming, and deleting named connector instances) are much simpler since they only require that the name of the connector and worker port be specified in the `connector_list` entries; for example this local variables file can be used to restart the two connector instances shown above:
 
 ```bash
 cat config-pause-connectors.yml
@@ -355,7 +353,7 @@ user: 'centos'
 region: us-west-2
 # define the action_list for this operation
 action_list:
-  - action: pause
+  - action: restart
     connector_list:
       - name: solrcloud-metrics
         worker_port: 8084
@@ -363,4 +361,89 @@ action_list:
         worker_port: 8084
 ```
 
-resuming, restarting, or removing these same instances would only require that the `action` shown above be modified (to `resume`, `restart`, or `delete`, respectively).
+resuming, restarting, or removing these same instances would only require that the `action` shown above be modified (to `pause`, `restart`, or `delete`, respectively).
+
+## Managing Workers in Single-Node Kafka Deployments
+In our previous discussion of [Managing Workers in the Connector Framework](#managing-workers-in-the-connector-framework), all of the examples that were shown involved managing workers in a Kafka cluster. In those scenarios, the workers are started (or restarted) in distributed mode (see [this link](https://docs.confluent.io/current/connect/concepts.html#distributed-workers) for more information on starting workers in distributed mode), and any connectors created on those workers will also run in a distributed mode, where the running connectors are distributed across the nodes of the cluster. When managing workers in a single-node (standalone) Kafka deployment, additional information must be provided when starting (or restarting) workers on the Kafka node. This is because at least one connector instance must be created at the same time that a worker is started when that worker is started in standalone mode (see [this link](https://docs.confluent.io/current/connect/concepts.html#standalone-workers) for more information on starting workers in standalone mode). That's not to say that additional connectors cannot be created later using the same mechanisms that are described in the previous section's discussion of [Managing Connectors](#managing-connectors), but starting a new worker in standalone mode requires that at least one connector be started at the same time.
+
+To accomplish this, when a worker is being started (or restarted) in a standalone Kafka node, the [modify-connectors.yml](../modify-connectors.yml) playbook looks for a `connector_list` entry that includes at least one entry. If the number of Kafka nodes targeted by the playbook run is not greater than one, and if any of the workers in the `worker_list` do not include a `connector_list` with at least one entry in it, then an error will be thrown and the playbook will not run. For example, to create the same worker and connectors shown previously on a standalone Kafka node, the following custom configuration file might be used:
+
+```bash
+$ cat config-start-standalone-workers.yml
+---
+# cloud type and VM tags
+cloud: aws
+tenant: datanexus
+project: demo
+domain: production
+dataflow: pipeline
+cluster: a
+# network configuration used when configuring the connectors
+internal_subnet: '10.10.1.0/24'
+external_subnet: '10.10.2.0/24'
+# username used to access the system via SSH
+user: 'centos'
+# the default region to search (the us-west-2 EC2 region)
+region: us-west-2
+# define the action_hash for this operation
+action_list:
+  - action: start-workers
+    worker_list:
+      - name: kafka-connect-solr
+        connector_name: kafka-connect-solr
+        worker_port: 8084
+        connector_list:
+          - name: solrcloud-metrics
+            config:
+              "connector.class": "com.github.jcustenborder.kafka.connect.solr.CloudSolrSinkConnector"
+              topics: metrics
+              "collection.name": "kafka_metrics"
+              "tasks.max": 1
+              "solr.zookeeper.hosts": "{{(solr_node | default('localhost')) + ':2181'}}"
+              "solr.zookeeper.chroot": "/lwfusion/3.1.2/solr"
+              "solr.commit.within": 1000
+              "solr.ignore.unknown.fields": 'false'
+          - name: solrcloud-logs
+            config:
+              "connector.class": "com.github.jcustenborder.kafka.connect.solr.CloudSolrSinkConnector"
+              topics: logs
+              "collection.name": "kafka_logs"
+              "tasks.max": 1
+              "solr.zookeeper.hosts": "{{(solr_node | default('localhost')) + ':2181'}}"
+              "solr.zookeeper.chroot": "/lwfusion/3.1.2/solr"
+              "solr.commit.within": 1000
+              "solr.ignore.unknown.fields": 'false'
+```
+
+Similarly, restarting that same worker would require that the `restart-workers` action listed in the `action_list` include a `connector_list` entry with at least one connector named in it:
+
+```bash
+$ cat config-restart-standalone-workers.yml
+---
+# cloud type and VM tags
+cloud: aws
+tenant: datanexus
+project: demo
+domain: production
+dataflow: pipeline
+cluster: a
+# network configuration used when configuring the connectors
+internal_subnet: '10.10.1.0/24'
+external_subnet: '10.10.2.0/24'
+# username used to access the system via SSH
+user: 'centos'
+# the default region to search (the us-west-2 EC2 region)
+region: us-west-2
+# define the action_hash for this operation
+action_list:
+  - action: restart-workers
+    worker_list:
+      - name: kafka-connect-solr
+        connector_list:
+          - { name: solrcloud-metrics }
+          - { name: solrcloud-logs }
+```
+
+As you can quite clearly see, the contents of the `connector_list` shown in these two custom configuration files are quite similar to the `connector_list` entries that were shown previously (in the [Managing Connectors](#managing-connectors) section of this document). The only difference is that the `worker_port` is not included in these `connector_list` entries, since the worker in question is already known from the `name` included in the `worker_list` that includes the `connector_list` shown here.
+
+It should also be noted that, as was the case with the `create` and `restart` actions shown in the [Managing Connectors](#managing-connectors) section of this document, the process of creating a new worker (and an associated connector) will trigger the generation of a new configuration file for that worker and connector. The process of restarting that worker or connector will not (so the same configuration that was used previously will be used when restarting connectors or workers).

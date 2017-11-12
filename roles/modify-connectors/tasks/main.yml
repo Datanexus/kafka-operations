@@ -17,6 +17,17 @@
         - 'application/x-zip'
       kafka_plugin_dir: "{{(kafka_distro == 'confluent') | ternary('/usr/share/java', kafka_dir + '/libs')}}"
       seconds_between_actions: "{{(action_hash.seconds_between_actions | default(0)) | int}}"
+      worker_actions:
+        - 'start-workers'
+        - 'stop-workers'
+        - 'restart-workers'
+      connector_actions:
+        - 'create'
+        - 'restart'
+        - 'update'
+        - 'pause'
+        - 'resume'
+        - 'delete'
   # if the action is 'load', then loop through the plugins that are being loaded
   # and add each of them, in turn, to the target nodes based on the information
   # in the corresponding 'action_hash' entry
@@ -28,8 +39,8 @@
       post_install_tasks: "{{item.post_install_tasks | default([])}}"
     with_items: "{{action_hash.plugin_list | default([])}}"
     when: (action_hash.action | default ('')) == 'load'
-  # if the action is 'start', 'stop', or 'restart', then start, stop, or restart
-  # a worker in the connector framework (in distributed mode) based on the
+  # if the action is 'start-workers', 'stop-workers', or 'restart-workers', then
+  # start, stop, or restart a worker in the connector framework based on the
   # information contained in the `action_hash` entry (and ensure that we can
   # communicate with that worker via the `worker_port` included in that same
   # `action_hash` entry)
@@ -52,17 +63,20 @@
         internal_value_converter: "{{item.internal_value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
         internal_value_converter_schemas_enable: "{{item.internal_value_converter_schemas_enable | default('false')}}"
         internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
-        # topics used by connectors to store offset, configuration, and status information
-        offset_topic: "{{item.offset_topic | default('connect-offsets')}}"
-        config_topic: "{{item.config_topic | default('connect-configs')}}"
-        status_topic: "{{item.status_topic | default('connect-status')}}"
         # worker specific configuration parameters
-        group_id: "{{item.group_id | default('default_group')}}"
         worker_name: "{{item.name | default('')}}"
         worker_classpath: "{{item.worker_classpath | default(kafka_plugin_dir + '/' + item.name + ',' + kafka_plugin_dir)}}"
         worker_port: "{{item.worker_port | default(rest_port)}}"
         connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
         action: "{{action_hash.action}}"
+        # only used when managing distributed workers (the group_id and topics
+        # used to store offset, configuration, and status information)
+        group_id: "{{item.group_id | default('default_group')}}"
+        offset_topic: "{{item.offset_topic | default('connect-offsets')}}"
+        config_topic: "{{item.config_topic | default('connect-configs')}}"
+        status_topic: "{{item.status_topic | default('connect-status')}}"
+        # used when managing standalone workers
+        connector_list: "{{item.connector_list | default([])}}"
       with_items: "{{action_hash.worker_list | default([])}}"
     # if we're starting a new worker in a cloud (AWS or OSP) environment, then
     # we need to make sure that the firewall rules for this instance allow for
@@ -72,8 +86,8 @@
         worker_ports: "{{action_hash.worker_list | map(attribute='worker_port') | list}}"
       when:
         - cloud == 'aws' or cloud == 'osp'
-        - (action_hash.action | default ('')) == 'start-workers'
-    when: ([(action_hash.action | default (''))] | intersect(['start-workers', 'stop-workers', 'restart-workers'])) != []
+        - ([action_hash.action | default ('')] | intersect(['start-workers', 'start-standalone-workers'])) != []
+    when: ([(action_hash.action | default (''))] | intersect(worker_actions)) != []
   # if the action is 'create', 'restart', 'update', 'pause', 'resume', or
   # 'delete' then loop through the connectors in the 'connector_list' contained
   # in the `action_hash` and perform the corresponding action on each of them,
@@ -85,7 +99,7 @@
       connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
       action: "{{action_hash.action}}"
     with_items: "{{action_hash.connector_list | default([])}}"
-    when: ([(action_hash.action | default (''))] | intersect(['create', 'restart', 'update', 'pause', 'resume', 'delete'])) != []
+    when: ([(action_hash.action | default (''))] | intersect(connector_actions)) != []
   - name: Pause before next action (if a pause was specified)
     pause:
       seconds: "{{seconds_between_actions}}"

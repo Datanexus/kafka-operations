@@ -63,6 +63,37 @@
     # the list of zk_nodes (the data_iface IP addresses of our zookeeper_nodes)
     - set_fact:
         zk_nodes: "{{zookeeper_nodes | map('extract', hostvars, [('ansible_' + data_iface), 'ipv4', 'address']) | list}}"
+    # Get a list of the actions where we're deploying a standalone worker and
+    # the connection_list entry for that worker is empty or does not exist; if
+    # any of the actions in the action_list have such entries, then throw an
+    # error before we do anything
+    - block:
+        # first get a list of the actions where workers are started
+        - name: Get a list of actions where workers are started or restarted
+          set_fact:
+            start_actions: "{{(action_list | default([])) | selectattr('action','equalto','start-workers') | list}}"
+            restart_actions: "{{(action_list | default([])) | selectattr('action','equalto','restart-workers') | list}}"
+        - name: Combine the two lists
+          set_fact:
+            all_start_actions: "{{start_actions + restart_actions}}"
+        # then, if we found any, look for workers with a zero-length
+        # (or missing) connection_list
+        - block:
+          - name: Get list of all workers from those actions
+            set_fact:
+              name_connector_list: '{{ (name_connector_list | default([])) + [{ "name": item.1.name, "connector_list_len": ((item.1.connector_list | default([])) or [] | length) }] }}'
+            with_subelements:
+              - "{{all_start_actions}}"
+              - worker_list
+          - name: Get a list of all of those workers with an empty (or no) connection_list
+            set_fact:
+              has_empty_connection_list: "{{name_connector_list | selectattr('connector_list_len', 'equalto', 0) | map(attribute='name') | list}}"
+          - name: Fail if that list is not empty
+            fail:
+              msg="One or more workers ({{has_empty_connection_list | to_json}}) defined with an empty/missing connector_list; at least one connector must be provided when (re)starting connectors on a standalone Kafka node"
+            when: has_empty_connection_list | length > 0
+          when: all_start_actions | length > 0
+      when: (kafka_nodes | length) == 1
     # Now that we have all of the facts we need we can proceed to modify the
     # connectors if that's what we're doing (add new connctors to the cluster,
     # managing connector instances, or managing worker instances)

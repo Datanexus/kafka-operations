@@ -5,11 +5,16 @@
 - name: Set some facts we'll use later
   set_fact:
     kfka_nodes: "{{kafka_nodes | map('extract', hostvars, [('ansible_' + api_iface), 'ipv4', 'address']) | list}}"
+    worker_mode: "{{((kafka_nodes | length) > 1) | ternary('Distributed','Standalone')}}"
+    worker_template_filename: "{{((kafka_nodes | length) > 1) | ternary('worker.properties.j2', 'standalone-worker.properties.j2')}}"
     worker_props_filename: "{{(worker_name != '') | ternary('worker-' + worker_name + '.properties', 'worker.properties')}}"
+    worker_offset_filename: "{{(worker_name != '') | ternary('worker-' + worker_name + '.offsets', 'worker.offsets')}}"
     worker_grep_str: "{{(worker_name != '') | ternary(' | grep ' + worker_name, '')}}"
     kafka_topics_cmd: "{{(kafka_distro == 'apache') | ternary(kafka_dir + '/bin/kafka-topics.sh', 'kafka-topics')}}"
     zk_node_str: "{{(zk_nodes | default(['localhost'])) | join(':2181,')}}:2181"
     topic_repl_factor: "{{[3,(kafka_nodes | length)] | min}}"
+# check to see if a worker is already running at the named port; ir not then
+# we can instantiate a new connector there
 - name: Check to see if a worker is already running
   uri:
     method: GET
@@ -18,37 +23,38 @@
   register: returned_content
   when: action == 'start-workers'
   failed_when: false
-# create the topics used to store configurations, offsets, and status (unless
-# they already exist, in which case this action will do nothing); start by
-# retrieving a list of the currently defined topics
-- name: Get list of topics currently available
-  shell: "{{kafka_topics_cmd}} --zookeeper={{zk_node_str}} --list"
-  register: kafka_topics_out
-  when: action == 'start-workers'
-# then, if the list of topics was successfully retrieved, create any of the
-# topics we need that do not exist in the currently defined list of topics
+# if we're starting a distributed worker, then ensure that the topics needed to
+# store configurations, offsets, and status already exist (and create them if
+# they do not)
 - block:
-  - name: Determine which of the worker-related topics need to be created
-    set_fact:
-      list_topics_create: "{{[offset_topic,config_topic,status_topic] | difference(kafka_topics_out.stdout_lines)}}"
-    run_once: true
-  - name: Create topics used by the worker
-    shell: "{{kafka_topics_cmd}} --create --zookeeper={{zk_node_str}} --replication-factor={{topic_repl_factor}} --partitions={{topic_hash.partitions}} --topic={{topic_hash.name}}"
-    with_items:
-     - { name: "{{offset_topic}}", partitions: 50}
-     - { name: "{{config_topic}}", partitions: 1}
-     - { name: "{{status_topic}}", partitions: 10}
-    loop_control:
-      loop_var: topic_hash
-    when: topic_hash.name in list_topics_create
-    register: command_result
-    failed_when:
-      - "'already exists' not in command_result.stdout"
-      - "command_result.rc != 0"
-    run_once: true
-    become_user: "{{kafka_user}}"
-  become: true
-  when: action == 'start-workers' and kafka_topics_out.rc == 0
+  - name: Get list of topics currently available
+    shell: "{{kafka_topics_cmd}} --zookeeper={{zk_node_str}} --list"
+    register: kafka_topics_out
+  # then, if the list of topics was successfully retrieved, create any of the
+  # topics we need that do not exist in the currently defined list of topics
+  - block:
+    - name: Determine which of the worker-related topics need to be created
+      set_fact:
+        list_topics_create: "{{[offset_topic,config_topic,status_topic] | difference(kafka_topics_out.stdout_lines)}}"
+      run_once: true
+    - name: Create topics used by the worker
+      shell: "{{kafka_topics_cmd}} --create --zookeeper={{zk_node_str}} --replication-factor={{topic_repl_factor}} --partitions={{topic_hash.partitions}} --topic={{topic_hash.name}}"
+      with_items:
+       - { name: "{{offset_topic}}", partitions: 50}
+       - { name: "{{config_topic}}", partitions: 1}
+       - { name: "{{status_topic}}", partitions: 10}
+      loop_control:
+        loop_var: topic_hash
+      when: topic_hash.name in list_topics_create
+      register: command_result
+      failed_when:
+        - "'already exists' not in command_result.stdout"
+        - "command_result.rc != 0"
+      run_once: true
+      become_user: "{{kafka_user}}"
+      become: true
+    when: kafka_topics_out.rc == 0
+  when: action == 'start-workers' and worker_mode == 'Distributed'
 # if a worker is not running at the named URL and we've been asked to start
 # a connector worker, then start it
 - block:
@@ -63,14 +69,14 @@
       mode: 0755
   - name: Create {{worker_props_filename}} file
     template:
-      src: worker.properties.j2
+      src: "{{worker_template_filename}}"
       dest: "/etc/kafka-connectors/{{worker_props_filename}}"
       owner: "{{kafka_user}}"
       group: "{{kafka_group}}"
       mode: 0644
   # if additional configuration parameters were passed in, then set the corresponding
   # parameters in the worker properties file
-  - name: Setup additional configuration options
+  - name: Setup additional worker configuration options
     lineinfile:
       dest: "/etc/kafka-connectors/{{worker_props_filename}}"
       line: "{{config_options.name}}={{config_options.value}}"
@@ -116,11 +122,33 @@
     loop_control:
       loop_var: config_options
     when: config_options.value != config_options.nil_val
-  # then, use that '{{worker_props_filename}}' file to start the connector worker via
+  # if we're starting a standalone worker, then create the properties files
+  # for the connectors in the connector_list
+  - block:
+    - name: Initialize list of connector properties files
+      set_fact:
+        connector_prop_files: []
+    - name: Create new connector properties files
+      include_tasks: create-standalone-connector-config.yml
+      vars:
+        connector: "{{connector_item}}"
+      with_items: "{{connector_list}}"
+      loop_control:
+        loop_var: connector_item
+    # then, use the '{{worker_props_filename}}' file and the list of
+    # '{{connector_prop_files}}' we just created to start the connector worker
+    # via the 'connect-standalone' command in 'daemon mode'
+    - name: Start worker
+      shell: "connect-standalone -daemon /etc/kafka-connectors/{{worker_props_filename}} {{connector_prop_files | join(' ')}}"
+      become_user: "{{kafka_user}}"
+    when: worker_mode == 'Standalone'
+  # if, on the other hane, we're starting a distributed worker, then use the
+  # '{{worker_props_filename}}' file to start the connector worker via
   # the 'connect-distributed' command in 'daemon mode'
   - name: Start worker
     shell: "connect-distributed -daemon /etc/kafka-connectors/{{worker_props_filename}}"
     become_user: "{{kafka_user}}"
+    when: worker_mode == 'Distributed'
   become: true
   when:
     - action == 'start-workers'
@@ -131,7 +159,7 @@
 - block:
     # get the process ID of the daemon
     - name: Get process ID for daemon
-      shell:  "ps aux | grep org.apache.kafka.connect.cli.ConnectDistributed{{worker_grep_str}} | grep -v grep | awk '{print $2}'"
+      shell:  "ps aux | grep org.apache.kafka.connect.cli.Connect{{worker_mode}}{{worker_grep_str}} | grep -v grep | awk '{print $2}'"
       register: ps_output
     # and kill that process ID
     - name: Kill that process ID
@@ -144,16 +172,36 @@
 - block:
     # get the process ID of the daemon
     - name: Get process ID for daemon
-      shell:  "ps aux | grep org.apache.kafka.connect.cli.ConnectDistributed{{worker_grep_str}} | grep -v grep | awk '{print $2}'"
+      shell:  "ps aux | grep org.apache.kafka.connect.cli.Connect{{worker_mode}}{{worker_grep_str}} | grep -v grep | awk '{print $2}'"
       register: ps_output
     # and kill that process ID
     - name: Kill that process ID and sleep
       shell: "kill {{ps_output.stdout_lines.0}}; sleep 5"
       when: ps_output.stdout_lines != []
-    # and restart the daemon with the same worker properties used when it was created
+    # and restart the daemon; if we're in standalone mode, then use this block to
+    # start the standalone worker with the same worker properties used when it
+    # was created
+    - block:
+      - debug: var=connector_list
+      # construct a list of connector properties files
+      - name: Get list of names from the connector_list entries
+        set_fact:
+          connector_names: "{{connector_list | map(attribute='name') | list}}"
+      - name: Construct list of corresponding connector properties filenames
+        set_fact:
+          connector_prop_files: "{{ connector_names | map('regex_replace', '(.*)', '/etc/kafka-connectors/\\1.properties') | list }}"
+      - debug: var=connector_prop_files
+      - debug: msg="connect-standalone -daemon /etc/kafka-connectors/{{worker_props_filename}} {{connector_prop_files | join(' ')}}"
+      # and restart the daemon with the same worker properties used when it was created
+      - name: Restart the daemon
+        shell: "connect-standalone -daemon /etc/kafka-connectors/{{worker_props_filename}} {{connector_prop_files | join(' ')}}"
+        become_user: "{{kafka_user}}"
+      when: ps_output.stdout_lines != [] and worker_mode == 'Standalone'
+    # else if we're in distributed mode, use this line to start the distributed
+    # worker with the same worker properties used when it was created
     - name: Restart the daemon
       shell: "connect-distributed -daemon /etc/kafka-connectors/{{worker_props_filename}}"
-      when: ps_output.stdout_lines != []
+      when: ps_output.stdout_lines != [] and worker_mode == 'Distributed'
       become_user: "{{kafka_user}}"
   become: true
   when: action == 'restart-workers'
