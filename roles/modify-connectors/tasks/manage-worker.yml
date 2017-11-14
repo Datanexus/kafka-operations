@@ -55,6 +55,18 @@
       become: true
     when: kafka_topics_out.rc == 0
   when: action == 'start-workers' and worker_mode == 'Distributed'
+# if we're starting a standalone worker, then ensure that a directory
+# exists that we can use for the offset filename
+- block:
+  - name: Ensure offset file directory exists
+    file:
+      path: "{{kafka_data_dir}}/offset-files"
+      state: directory
+      owner: "{{kafka_user}}"
+      group: "{{kafka_group}}"
+      mode: 0755
+    become: true
+  when: action == 'start-workers' and worker_mode == 'Standalone'
 # if a worker is not running at the named URL and we've been asked to start
 # a connector worker, then start it
 - block:
@@ -182,7 +194,6 @@
     # start the standalone worker with the same worker properties used when it
     # was created
     - block:
-      - debug: var=connector_list
       # construct a list of connector properties files
       - name: Get list of names from the connector_list entries
         set_fact:
@@ -190,8 +201,6 @@
       - name: Construct list of corresponding connector properties filenames
         set_fact:
           connector_prop_files: "{{ connector_names | map('regex_replace', '(.*)', '/etc/kafka-connectors/\\1.properties') | list }}"
-      - debug: var=connector_prop_files
-      - debug: msg="connect-standalone -daemon /etc/kafka-connectors/{{worker_props_filename}} {{connector_prop_files | join(' ')}}"
       # and restart the daemon with the same worker properties used when it was created
       - name: Restart the daemon
         shell: "connect-standalone -daemon /etc/kafka-connectors/{{worker_props_filename}} {{connector_prop_files | join(' ')}}"

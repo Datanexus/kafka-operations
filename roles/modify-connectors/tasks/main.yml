@@ -49,20 +49,20 @@
       vars:
         # properties set for key converter
         key_converter: "{{item.key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
-        key_converter_schemas_enable: "{{item.key_converter_schemas_enable | default('false')}}"
-        key_converter_schema_registry_url: "{{((item.key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        key_converter_schemas_enable: "{{(item.key_converter_schemas_enable | default('false') | lower)}}"
+        key_converter_schema_registry_url: "{{((item.key_converter_schemas_enable | default('false') | lower) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
         # properties set for value converter
         value_converter: "{{item.value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
-        value_converter_schemas_enable: "{{item.value_converter_schemas_enable | default('false')}}"
-        value_converter_schema_registry_url: "{{((item.value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        value_converter_schemas_enable: "{{item.value_converter_schemas_enable | default('false') | lower}}"
+        value_converter_schema_registry_url: "{{((item.value_converter_schemas_enable | default('false') | lower) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
         # properties set for internal key converter
         internal_key_converter: "{{item.internal_key_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
-        internal_key_converter_schemas_enable: "{{item.internal_key_converter_schemas_enable | default('false')}}"
-        internal_key_converter_schema_registry_url: "{{((item.internal_key_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        internal_key_converter_schemas_enable: "{{item.internal_key_converter_schemas_enable | default('false') | lower}}"
+        internal_key_converter_schema_registry_url: "{{((item.internal_key_converter_schemas_enable | default('false') | lower) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
         # properties set for internal value converter
         internal_value_converter: "{{item.internal_value_converter | default('org.apache.kafka.connect.json.JsonConverter')}}"
-        internal_value_converter_schemas_enable: "{{item.internal_value_converter_schemas_enable | default('false')}}"
-        internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false')) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
+        internal_value_converter_schemas_enable: "{{item.internal_value_converter_schemas_enable | default('false') | lower}}"
+        internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false') | lower) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
         # worker specific configuration parameters
         worker_name: "{{item.name | default('')}}"
         worker_classpath: "{{item.worker_classpath | default(kafka_plugin_dir + '/' + item.name + ',' + kafka_plugin_dir)}}"
