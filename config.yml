@@ -16,4 +16,4 @@ user: 'centos'
 # the default region to search (the us-west-2 EC2 region)
 region: us-west-2
 # define an ampty action_list as the default operation
-action_list: { }
+action_list: [ ]
