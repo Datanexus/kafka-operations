@@ -65,7 +65,6 @@
         internal_value_converter_schema_registry_url: "{{((item.internal_value_converter_schemas_enable | default('false') | lower) == 'true') | ternary('http://' + api_addr + ':' + (schema_registry_port | string),'')}}"
         # worker specific configuration parameters
         worker_name: "{{item.name | default('')}}"
-        worker_classpath: "{{item.worker_classpath | default(kafka_plugin_dir + '/' + item.name + ',' + kafka_plugin_dir)}}"
         worker_port: "{{item.worker_port | default(rest_port)}}"
         connector_worker_url: "http://{{api_addr}}:{{item.worker_port | default(rest_port)}}/connectors"
         action: "{{action_hash.action}}"
