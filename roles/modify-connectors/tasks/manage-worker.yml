@@ -70,8 +70,42 @@
 # if a worker is not running at the named URL and we've been asked to start
 # a connector worker, then start it
 - block:
-  # first, construct a properties file from the worker_properties hash and
-  # the cluster configuration
+  # if the plugin was installed as a package (from an RPM file), then we
+  # need to make sure we know where the JAR files from that package were
+  # installed; if a package with plugin name does not exist, then we should
+  # just assume it was unpacked or installed into a directory under the
+  # '/usr/share/java' directory and setup our worker_classpath accordingly
+  - name: "Check to see if {{worker_name}} plugin was installed as a package"
+    yum:
+      list: "{{worker_name}}"
+    register: package_name_out
+  # if we got information back about the named worker, then get the path that
+  # the JAR files from that package were installed into and use it to setup the
+  # correct `worker_classpath`; if not, then we should just construct the
+  # `worker_classpath` the way we always have
+  - block:
+    - name: If {{worker_name}} plugin was installed as a package, set a pattern to grep for
+      set_fact:
+        main_jar_pattern: '{{worker_name}}-[0-9\.].*.jar'
+    - name: "Get a list of the contents of the {{worker_name}} package"
+      shell: "rpm -ql {{worker_name}} | grep '{{main_jar_pattern}}'"
+      args:
+        warn: no
+      register: package_list_out
+    - name: Set variables containing the installation directory and its root
+      set_fact:
+        package_jar_dir: "{{package_list_out.stdout | dirname}}"
+        package_jar_dir_root: "{{package_list_out.stdout | dirname | dirname}}"
+    - name: And use those facts to construct the appropriate worker_classpath
+      set_fact:
+        worker_classpath: "{{(package_jar_dir == kafka_plugin_dir) | ternary((kafka_plugin_dir + '/' + worker_name + ',' + kafka_plugin_dir), (package_jar_dir_root + ',' + kafka_plugin_dir))}}"
+    when: package_name_out.results != []
+  - name: "If {{worker_name}} was not installed as a package, set the worker_classpath accordingly"
+    set_fact:
+      worker_classpath: "{{kafka_plugin_dir + '/' + worker_name + ',' + kafka_plugin_dir}}"
+    when: package_name_out.results == []
+  # Now that we have our worker_classpath set, construct a properties file from
+  # that fact, the worker_properties hash and the cluster configuration
   - name: Ensure directory for worker properties file exists
     file:
       path: "/etc/kafka-connectors"
